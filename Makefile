@@ -321,8 +321,24 @@ CFLAGS += -DUF2_VERSION_BASE='"$(GIT_VERSION)"'
 CFLAGS += -DUF2_VERSION='"$(GIT_VERSION) $(GIT_SUBMODULE_VERSIONS)"'
 CFLAGS += -DBLEDIS_FW_VERSION='"$(GIT_VERSION) $(SD_NAME) $(SD_VERSION)"'
 
-_VER = $(subst ., ,$(word 1, $(subst -, ,$(GIT_VERSION))))
-CFLAGS += -DMK_BOOTLOADER_VERSION='($(word 1,$(_VER)) << 16) + ($(word 2,$(_VER)) << 8) + $(word 3,$(_VER))'
+# 先简单判断是否含数字点，粗略识别语义版本tag
+IS_SEMVER := $(shell echo $(GIT_VERSION) | grep -E '^[vV]?[0-9]+\.[0-9]+\.[0-9]+' > /dev/null && echo yes || echo no)
+
+#_VER = $(subst ., ,$(word 1, $(subst -, ,$(GIT_VERSION))))
+#CFLAGS += -DMK_BOOTLOADER_VERSION='($(word 1,$(_VER)) << 16) + ($(word 2,$(_VER)) << 8) + $(word 3,$(_VER))'
+ifeq ($(IS_SEMVER),yes)
+  # 处理语义版本tag，去掉开头v，支持附加后缀处理
+  VERSION_CLEAN := $(patsubst v%,%,$(GIT_VERSION))
+  VERSION_CLEAN := $(word 1,$(subst -, ,$(VERSION_CLEAN)))   # 去除 - 后缀
+
+  _VER := $(subst ., ,$(VERSION_CLEAN))
+
+  CFLAGS += -DMK_BOOTLOADER_VERSION='($(word 1,$(_VER)) << 16) + ($(word 2,$(_VER)) << 8) + $(word 3,$(_VER))'
+else
+  # 非版本号（hash 或其他），设置为默认数字值，譬如0
+  CFLAGS += -DMK_BOOTLOADER_VERSION=0
+endif
+
 
 # Debug option use RTT for printf
 ifeq ($(DEBUG), 1)
