@@ -41,6 +41,7 @@ else
 endif
 
 GIT_VERSION := $(shell git describe --dirty --always --tags)
+GIT_HASH := $(shell git rev-parse --short HEAD)
 GIT_SUBMODULE_VERSIONS := $(shell git submodule status | cut -d" " -f3,4 | paste -s -d" " -)
 
 # compiled file name
@@ -321,8 +322,18 @@ CFLAGS += -DUF2_VERSION_BASE='"$(GIT_VERSION)"'
 CFLAGS += -DUF2_VERSION='"$(GIT_VERSION) $(GIT_SUBMODULE_VERSIONS)"'
 CFLAGS += -DBLEDIS_FW_VERSION='"$(GIT_VERSION) $(SD_NAME) $(SD_VERSION)"'
 
-_VER = $(subst ., ,$(word 1, $(subst -, ,$(GIT_VERSION))))
-CFLAGS += -DMK_BOOTLOADER_VERSION='($(word 1,$(_VER)) << 16) + ($(word 2,$(_VER)) << 8) + $(word 3,$(_VER))'
+IS_SEMVER := $(shell echo $(GIT_VERSION) | grep -E '^[vV]?[0-9]+\.[0-9]+\.[0-9]+' > /dev/null && echo yes || echo no)
+
+ifeq ($(IS_SEMVER),yes)
+  VERSION_CLEAN := $(patsubst v%,%,$(GIT_VERSION))
+  VERSION_CLEAN := $(word 1,$(subst -, ,$(VERSION_CLEAN)))
+
+  _VER := $(subst ., ,$(VERSION_CLEAN))
+
+  CFLAGS += -DMK_BOOTLOADER_VERSION='($(word 1,$(_VER)) << 16) + ($(word 2,$(_VER)) << 8) + $(word 3,$(_VER))'
+else
+  CFLAGS += -DMK_BOOTLOADER_VERSION=0x$(GIT_HASH)
+endif
 
 # Debug option use RTT for printf
 ifeq ($(DEBUG), 1)
@@ -392,7 +403,7 @@ INC_PATHS = $(addprefix -I,$(IPATH))
 .PHONY: all clean flash flash-dfu flash-sd flash-mbr dfu-flash sd mbr gdbflash gdb
 
 # default target to build
-all: $(BUILD)/$(OUT_NAME).out $(BUILD)/$(OUT_NAME)_nosd.hex $(BUILD)/update-$(OUT_NAME)_nosd.uf2 $(BUILD)/$(MERGED_FILE).hex $(BUILD)/$(MERGED_FILE).zip
+all: $(BUILD)/$(OUT_NAME).out $(BUILD)/$(OUT_NAME)_nosd.hex $(BUILD)/update-$(OUT_NAME)_nosd.uf2 $(BUILD)/update-$(OUT_NAME)_sdonly.uf2 $(BUILD)/$(MERGED_FILE).hex $(BUILD)/$(MERGED_FILE).zip
 
 # Print out the value of a make variable.
 # https://stackoverflow.com/questions/16467718/how-to-print-out-a-variable-in-makefile
@@ -446,6 +457,19 @@ $(BUILD)/update-$(OUT_NAME)_nosd.uf2: $(BUILD)/$(OUT_NAME)_nosd.hex
 	@echo Create $(notdir $@)
 	@python3 lib/uf2/utils/uf2conv.py -f $(UF2_FAMILY_ID_BOOTLOADER) -c -o $@ $^
 
+$(BUILD)/$(SD_FILENAME).bin:
+	@if [ ! -f $@ ]; then \
+		echo "Create $(notdir $@)"; \
+		$(OBJCOPY) -I ihex -O binary $(SD_HEX) $@; \
+	else \
+		echo "$(notdir $@) already exists, skip."; \
+	fi
+
+# sd only update uf2 , without bootload and mbr
+$(BUILD)/update-$(OUT_NAME)_sdonly.uf2: $(BUILD)/$(SD_FILENAME).bin
+	@echo Create $(notdir $@)
+	@python3 lib/uf2/utils/uf2conv.py -f $(UF2_FAMILY_ID_BOOTLOADER) -b 0x1000 -c -o $@ $^
+
 # merge bootloader and sd hex together
 $(BUILD)/$(MERGED_FILE).hex: $(BUILD)/$(OUT_NAME).hex
 	@echo Create $(notdir $@)
@@ -461,6 +485,7 @@ $(BIN):
 
 copy-artifact: $(BIN)
 	@$(CP) $(BUILD)/update-$(OUT_NAME)_nosd.uf2 $(BIN)
+	@$(CP) $(BUILD)/update-$(OUT_NAME)_sdonly.uf2 $(BIN)
 	@$(CP) $(BUILD)/$(MERGED_FILE).hex $(BIN)
 	@$(CP) $(BUILD)/$(MERGED_FILE).zip $(BIN)
 
