@@ -38,6 +38,10 @@ In addition, there is also lots of other 3rd-party boards which are added by oth
 There are two pins, `DFU` and `FRST` that bootloader will check upon reset/power:
 
 - `Double Reset` Reset twice within 500 ms will enter DFU with UF2 and CDC support (only works with nRF52840)
+- On nice!nano v2, disconnecting power during the first 10 seconds after a cold
+  start and then reconnecting it enters DFU with UF2 and CDC support. This
+  buttonless mode deliberately delays a normal cold start by 10 seconds. Reset
+  pin and software resets keep their existing behavior and do not trigger it.
 - `DFU = LOW` and `FRST = HIGH`: Enter bootloader with UF2 and CDC support
 - `DFU = LOW` and `FRST = LOW`: Enter bootloader with OTA, to upgrade with a mobile application such as Nordic nrfConnect/Toolbox
 - <s>`DFU = HIGH` and `FRST = LOW`: Factory Reset mode: erase firmware application and its data</s>

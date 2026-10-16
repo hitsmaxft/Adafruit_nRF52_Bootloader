@@ -120,6 +120,72 @@ extern void tusb_hal_nrf_power_event(uint32_t event);
 #define BOOTLOADER_VERSION_REGISTER     NRF_TIMER2->CC[0]
 #define DFU_SERIAL_STARTUP_INTERVAL     1000
 
+#ifdef POWER_CYCLE_DFU_WINDOW_MS
+#ifndef POWER_CYCLE_DFU_JOURNAL_ADDR
+#error "POWER_CYCLE_DFU_JOURNAL_ADDR must be defined with POWER_CYCLE_DFU_WINDOW_MS"
+#endif
+
+#define POWER_CYCLE_DFU_JOURNAL_WORDS  (CODE_PAGE_SIZE / sizeof(uint32_t))
+#define POWER_CYCLE_WINDOW_OPEN        0xFFFFFFFEu
+#define POWER_CYCLE_WINDOW_CLOSED      0xFFFFFFFCu
+
+static uint32_t *power_cycle_journal_last(void) {
+  uint32_t *journal = (uint32_t *) POWER_CYCLE_DFU_JOURNAL_ADDR;
+  uint32_t *last = NULL;
+
+  for (uint32_t i = 0; i < POWER_CYCLE_DFU_JOURNAL_WORDS; i++) {
+    if (journal[i] == UINT32_MAX) break;
+    last = &journal[i];
+  }
+
+  return last;
+}
+
+static void power_cycle_journal_close(uint32_t *entry) {
+  if (entry != NULL && *entry == POWER_CYCLE_WINDOW_OPEN) {
+    nrfx_nvmc_word_write((uint32_t) entry, POWER_CYCLE_WINDOW_CLOSED);
+  }
+}
+
+static uint32_t *power_cycle_journal_open(void) {
+  uint32_t *journal = (uint32_t *) POWER_CYCLE_DFU_JOURNAL_ADDR;
+  uint32_t *last = power_cycle_journal_last();
+  uint32_t *next = (last == NULL) ? journal : last + 1;
+
+  if (next >= journal + POWER_CYCLE_DFU_JOURNAL_WORDS) {
+    nrfx_nvmc_page_erase(POWER_CYCLE_DFU_JOURNAL_ADDR);
+    next = journal;
+  }
+
+  nrfx_nvmc_word_write((uint32_t) next, POWER_CYCLE_WINDOW_OPEN);
+  return next;
+}
+
+static bool power_cycle_dfu_check(bool power_on_reset) {
+  uint32_t *last = power_cycle_journal_last();
+
+  // A reset pin or software reset must not consume a pending power-cycle
+  // window as a DFU request. Close it and leave those resets to the existing
+  // double-reset and GPREGRET paths.
+  if (!power_on_reset) {
+    power_cycle_journal_close(last);
+    return false;
+  }
+
+  // An open entry means power disappeared before the previous 10 s window
+  // completed. Close it before entering DFU so later resets can boot the app.
+  if (last != NULL && *last == POWER_CYCLE_WINDOW_OPEN) {
+    power_cycle_journal_close(last);
+    return true;
+  }
+
+  uint32_t *entry = power_cycle_journal_open();
+  NRFX_DELAY_MS(POWER_CYCLE_DFU_WINDOW_MS);
+  power_cycle_journal_close(entry);
+  return false;
+}
+#endif
+
 // Allow for using reset button essentially to swap between application and bootloader.
 // This is controlled by a flag in the app and is the behavior of CPX and all Arcade boards when using MakeCode.
 // DFU_DBL_RESET magic is used to determined which mode is entered
@@ -263,6 +329,13 @@ static void check_dfu_mode(void) {
   _ota_dfu = _ota_dfu || (button_pressed(BUTTON_DFU) && button_pressed(BUTTON_FRESET));
 
   bool const valid_app = bootloader_app_is_valid();
+
+#ifdef POWER_CYCLE_DFU_WINDOW_MS
+  if (valid_app && !dfu_start) {
+    dfu_start = power_cycle_dfu_check(NRF_POWER->RESETREAS == 0);
+  }
+#endif
+
   bool const just_start_app = valid_app && !dfu_start && (*dbl_reset_mem) == DFU_DBL_RESET_APP;
 
   if (!just_start_app && APP_ASKS_FOR_SINGLE_TAP_RESET()) dfu_start = 1;
